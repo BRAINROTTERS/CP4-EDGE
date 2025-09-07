@@ -1,0 +1,189 @@
+//CP4 EDGE COMPUTING AND COMPUTER SYSTEMS
+//PROJETO FIWARE COM ESP32 DO GRUPO BRAINROTTERS
+//ALUNOS: RAFAEL MORAES RIBEIRO DOS SANTOS RM:565075, JOÃO CAZARINI RM: 562543,
+//GUILHERME ANDRADE AMARAL RM562112, ENRICO BAGLI BORGES RM:562541, MATHEUS ANTUNES RM:561292.
+#include <WiFi.h>           // Biblioteca para conexão Wi-Fi no ESP32
+#include <PubSubClient.h>   // Biblioteca para comunicação MQTT
+
+// ================== CONFIGURAÇÕES PADRÃO ==================
+const char* default_SSID = "Wokwi-GUEST"; // Nome da rede Wi-Fi
+const char* default_PASSWORD = "";        // Senha da rede Wi-Fi
+const char* default_BROKER_MQTT = "20.49.9.58"; // IP do Broker MQTT
+const int default_BROKER_PORT = 1883;           // Porta padrão do MQTT
+const char* default_TOPICO_SUBSCRIBE = "/TEF/lamp001/cmd";   // Tópico para receber comandos
+const char* default_TOPICO_PUBLISH_1 = "/TEF/lamp001/attrs"; // Tópico para publicar estado do LED
+const char* default_TOPICO_PUBLISH_2 = "/TEF/lamp001/attrs/l"; // Tópico para publicar luminosidade
+const char* default_ID_MQTT = "fiware_001";   // ID do cliente MQTT
+const int default_D4 = 2;                     // Pino do LED onboard (GPIO2)
+const char* topicPrefix = "lamp001";          // Prefixo usado para montar comandos
+
+// ================== VARIÁVEIS EDITÁVEIS ==================
+char* SSID = const_cast<char*>(default_SSID);
+char* PASSWORD = const_cast<char*>(default_PASSWORD);
+char* BROKER_MQTT = const_cast<char*>(default_BROKER_MQTT);
+int BROKER_PORT = default_BROKER_PORT;
+char* TOPICO_SUBSCRIBE = const_cast<char*>(default_TOPICO_SUBSCRIBE);
+char* TOPICO_PUBLISH_1 = const_cast<char*>(default_TOPICO_PUBLISH_1);
+char* TOPICO_PUBLISH_2 = const_cast<char*>(default_TOPICO_PUBLISH_2);
+char* ID_MQTT = const_cast<char*>(default_ID_MQTT);
+int D4 = default_D4;
+
+// ================== OBJETOS PRINCIPAIS ==================
+WiFiClient espClient;         // Cliente Wi-Fi
+PubSubClient MQTT(espClient); // Cliente MQTT usando a conexão Wi-Fi
+char EstadoSaida = '0';       // Estado do LED ('0' desligado, '1' ligado)
+
+// ================== FUNÇÕES DE INICIALIZAÇÃO ==================
+
+// Inicia a comunicação Serial
+void initSerial() {
+    Serial.begin(115200);
+}
+
+// Conecta ao Wi-Fi
+void initWiFi() {
+    delay(10);
+    Serial.println("------Conexao WI-FI------");
+    Serial.print("Conectando-se na rede: ");
+    Serial.println(SSID);
+    Serial.println("Aguarde");
+    reconectWiFi(); // Chama a função de reconexão
+}
+
+// Configura o servidor MQTT e define o callback
+void initMQTT() {
+    MQTT.setServer(BROKER_MQTT, BROKER_PORT);
+    MQTT.setCallback(mqtt_callback);
+}
+
+// ================== SETUP ==================
+void setup() {
+    InitOutput();       // Inicializa LED onboard piscando
+    initSerial();       // Inicia comunicação serial
+    initWiFi();         // Conecta no Wi-Fi
+    initMQTT();         // Configura servidor MQTT
+    delay(5000);
+    MQTT.publish(TOPICO_PUBLISH_1, "s|on"); // Publica mensagem inicial
+}
+
+// ================== LOOP PRINCIPAL ==================
+void loop() {
+    VerificaConexoesWiFIEMQTT(); // Verifica e reconecta Wi-Fi/MQTT se necessário
+    EnviaEstadoOutputMQTT();     // Publica estado atual do LED
+    handleLuminosity();          // Lê e publica luminosidade
+    MQTT.loop();                 // Mantém conexão MQTT ativa
+}
+
+// ================== FUNÇÕES AUXILIARES ==================
+
+// Reconecta ao Wi-Fi caso desconecte
+void reconectWiFi() {
+    if (WiFi.status() == WL_CONNECTED)
+        return;
+
+    WiFi.begin(SSID, PASSWORD);
+    while (WiFi.status() != WL_CONNECTED) {
+        delay(100);
+        Serial.print(".");
+    }
+    Serial.println();
+    Serial.println("Conectado com sucesso na rede ");
+    Serial.print(SSID);
+    Serial.println("IP obtido: ");
+    Serial.println(WiFi.localIP());
+
+    // Garante que o LED comece desligado
+    digitalWrite(D4, LOW);
+}
+
+// Função chamada quando chega mensagem MQTT
+void mqtt_callback(char* topic, byte* payload, unsigned int length) {
+    String msg;
+    for (int i = 0; i < length; i++) {
+        msg += (char)payload[i]; // Monta a mensagem recebida
+    }
+    Serial.print("- Mensagem recebida: ");
+    Serial.println(msg);
+
+    // Monta mensagens esperadas
+    String onTopic = String(topicPrefix) + "@on|";
+    String offTopic = String(topicPrefix) + "@off|";
+
+    // Liga LED se mensagem for "@on|"
+    if (msg.equals(onTopic)) {
+        digitalWrite(D4, HIGH);
+        EstadoSaida = '1';
+    }
+
+    // Desliga LED se mensagem for "@off|"
+    if (msg.equals(offTopic)) {
+        digitalWrite(D4, LOW);
+        EstadoSaida = '0';
+    }
+}
+
+// Verifica se Wi-Fi e MQTT estão conectados
+void VerificaConexoesWiFIEMQTT() {
+    if (!MQTT.connected())
+        reconnectMQTT();
+    reconectWiFi();
+}
+
+// Publica estado do LED no broker
+void EnviaEstadoOutputMQTT() {
+    if (EstadoSaida == '1') {
+        MQTT.publish(TOPICO_PUBLISH_1, "s|on");
+        Serial.println("- Led Ligado");
+    }
+
+    if (EstadoSaida == '0') {
+        MQTT.publish(TOPICO_PUBLISH_1, "s|off");
+        Serial.println("- Led Desligado");
+    }
+    Serial.println("- Estado do LED enviado ao broker!");
+    delay(1000);
+}
+
+// Inicializa o LED onboard piscando várias vezes
+void InitOutput() {
+    pinMode(D4, OUTPUT);
+    digitalWrite(D4, HIGH);
+    boolean toggle = false;
+
+    for (int i = 0; i <= 10; i++) {
+        toggle = !toggle;
+        digitalWrite(D4, toggle);
+        delay(200);
+    }
+}
+
+// Reconecta ao Broker MQTT caso desconecte
+void reconnectMQTT() {
+    while (!MQTT.connected()) {
+        Serial.print("* Tentando se conectar ao Broker MQTT: ");
+        Serial.println(BROKER_MQTT);
+        if (MQTT.connect(ID_MQTT)) {
+            Serial.println("Conectado com sucesso ao broker MQTT!");
+            MQTT.subscribe(TOPICO_SUBSCRIBE); // Se inscreve no tópico de comandos
+        } else {
+            Serial.println("Falha ao reconectar no broker.");
+            Serial.println("Haverá nova tentativa em 2s");
+            delay(2000);
+        }
+    }
+}
+
+// Lê sensor de luminosidade (potenciômetro no pino 34)
+// Converte valor analógico (0–4095) para porcentagem (0–100)
+// E envia para o broker
+void handleLuminosity() {
+    const int potPin = 34; // Pino analógico
+    int sensorValue = analogRead(potPin);               // Lê valor (0–4095)
+    int luminosity = map(sensorValue, 0, 4095, 0, 100); // Converte para %
+    String mensagem = String(luminosity);
+
+    Serial.print("Valor da luminosidade: ");
+    Serial.println(mensagem.c_str());
+
+    MQTT.publish(TOPICO_PUBLISH_2, mensagem.c_str()); // Publica no tópico de luminosidade
+}
